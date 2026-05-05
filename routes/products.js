@@ -7,30 +7,44 @@ const Product = require('../models/Product');
 const adminAuth = require('../middleware/adminAuth');
 
 // ─── Multer setup ─────────────────────────────────────────────────────────────
+// Vercel serverless has a read-only filesystem — disk storage crashes at startup.
+// On Vercel, use memoryStorage (files are received but not persisted to disk).
+// On Vercel, only image URLs typed by the admin are saved; uploaded files are ignored.
+// Locally, disk storage works as before.
 
-const uploadDir = path.join(__dirname, '../uploads/products');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const IS_VERCEL = !!process.env.VERCEL;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `product-${Date.now()}-${Math.round(Math.random() * 9999)}${ext}`);
-  },
-});
+let upload;
+if (IS_VERCEL) {
+  upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+  });
+} else {
+  const uploadDir = path.join(__dirname, '../uploads/products');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-const upload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
-    if (allowed.includes(path.extname(file.originalname).toLowerCase())) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files (jpg, jpeg, png, webp, gif) are allowed.'));
-    }
-  },
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB per file
-});
+  const diskStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      cb(null, `product-${Date.now()}-${Math.round(Math.random() * 9999)}${ext}`);
+    },
+  });
+
+  upload = multer({
+    storage: diskStorage,
+    fileFilter: (req, file, cb) => {
+      const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+      if (allowed.includes(path.extname(file.originalname).toLowerCase())) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only image files (jpg, jpeg, png, webp, gif) are allowed.'));
+      }
+    },
+    limits: { fileSize: 5 * 1024 * 1024 },
+  });
+}
 
 // ─── Parse product body from multipart/form-data ─────────────────────────────
 
@@ -42,9 +56,14 @@ function parseProductBody(body, files, fallbackImages = []) {
     imageUrls = raw.filter((u) => u && u.trim() !== '');
   }
 
-  // Collect uploaded file paths as full URLs
-  const BASE = process.env.BACKEND_URL || 'http://localhost:5000';
-  const uploadedUrls = (files || []).map((f) => `${BASE}/uploads/products/${f.filename}`);
+  // File uploads are not supported on Vercel (no persistent disk storage).
+  // On Vercel, admins must use image URL inputs instead of file uploads.
+  const uploadedUrls = IS_VERCEL
+    ? []
+    : (files || []).map((f) => {
+        const BASE = process.env.BACKEND_URL || 'http://localhost:5000';
+        return `${BASE}/uploads/products/${f.filename}`;
+      });
 
   const combined = [...imageUrls, ...uploadedUrls];
 
