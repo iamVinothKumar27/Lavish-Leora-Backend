@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'santhoshmass54@gmail.com').toLowerCase();
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'lavishleora@gmail.com').toLowerCase().trim();
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -41,12 +41,15 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'An account with this email already exists. Please sign in.' });
     }
 
+    const assignedRole = normalizedEmail === ADMIN_EMAIL ? 'admin' : 'user';
+    console.log(`[Auth] Register — email: ${normalizedEmail} | ADMIN_EMAIL: ${ADMIN_EMAIL} | role: ${assignedRole}`);
+
     const hashed = await bcrypt.hash(password, 12);
     const user = await User.create({
       name: name.trim(),
       email: normalizedEmail,
       password: hashed,
-      role: normalizedEmail === ADMIN_EMAIL ? 'admin' : 'user',
+      role: assignedRole,
     });
 
     const token = makeToken(user);
@@ -124,19 +127,22 @@ router.post('/google', async (req, res) => {
 
     let user = await User.findOne({ email: normalizedEmail });
 
+    const isAdmin = normalizedEmail === ADMIN_EMAIL;
+    console.log(`[Auth] Google — email: ${normalizedEmail} | ADMIN_EMAIL: ${ADMIN_EMAIL} | isAdmin: ${isAdmin}`);
+
     if (!user) {
       user = await User.create({
         googleId,
         email: normalizedEmail,
         name,
         picture,
-        role: normalizedEmail === ADMIN_EMAIL ? 'admin' : 'user',
+        role: isAdmin ? 'admin' : 'user',
       });
       console.log(`[Auth] New user created: ${normalizedEmail} (role: ${user.role})`);
     } else {
       user.googleId = googleId;
       user.picture = picture;
-      if (normalizedEmail === ADMIN_EMAIL) user.role = 'admin';
+      user.role = isAdmin ? 'admin' : 'user';
       await user.save();
       console.log(`[Auth] Existing user updated: ${normalizedEmail} (role: ${user.role})`);
     }
