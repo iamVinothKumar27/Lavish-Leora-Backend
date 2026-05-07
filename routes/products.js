@@ -1,57 +1,97 @@
 const express = require('express');
 const router = express.Router();
+const path = require('path');
 const multer = require('multer');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const cloudinary = require('../config/cloudinary');
+const { GridFsStorage } = require('multer-gridfs-storage');
+const mongoose = require('mongoose');
 const Product = require('../models/Product');
 const adminAuth = require('../middleware/adminAuth');
+const { getGridFSBucket } = require('../config/gridfs');
 
-// ─── Cloudinary storage for product images ────────────────────────────────────
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'lavish-leora/products',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-    transformation: [{ quality: 'auto', fetch_format: 'auto' }],
+// ─── GridFS multer storage ────────────────────────────────────────────────────
+// Passes db: mongoose.connection — GridFsStorage waits for 'open' if not yet connected
+const storage = new GridFsStorage({
+  db: mongoose.connection,
+  file: (req, file) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    return {
+      bucketName: 'productImages',
+      filename: `product-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`,
+      contentType: file.mimetype,
+    };
   },
 });
+
+storage.on('connection', () => console.log('[GridFsStorage] connected'));
+storage.on('connectionFailed', (err) => console.error('[GridFsStorage] connection failed:', err));
 
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (allowed.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only jpg, jpeg, png, webp images are allowed.'));
-    }
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Only jpg, jpeg, png, webp images are allowed.'));
   },
 });
 
-// ─── Parse product body from multipart/form-data ─────────────────────────────
+// Multer errors (file-too-large, bad type) return JSON instead of crashing
+function runUpload(req, res, next) {
+  upload.array('imageFiles', 10)(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE'
+      ? 'File too large — max 5 MB per image.'
+      : err.message || 'File upload failed.';
+    console.error('[Products] multer error:', err.message);
+    res.status(400).json({ message: msg });
+  });
+}
 
+// ─── Delete GridFS images by their stored path strings ────────────────────────
+async function deleteGridFSImages(imagePaths) {
+  const toDelete = (imagePaths || []).filter(
+    (img) => typeof img === 'string' && img.startsWith('/api/uploads/')
+  );
+  if (!toDelete.length) return;
+
+  let bucket;
+  try { bucket = getGridFSBucket(); } catch { return; }
+
+  for (const imgPath of toDelete) {
+    const filename = imgPath.slice('/api/uploads/'.length);
+    try {
+      const files = await bucket.find({ filename }).toArray();
+      for (const f of files) {
+        await bucket.delete(f._id);
+        console.log('[GridFS] deleted:', filename);
+      }
+    } catch (e) {
+      console.error('[GridFS] delete error for', filename, ':', e.message);
+    }
+  }
+}
+
+// ─── Parse multipart body into a product data object ─────────────────────────
 function parseProductBody(body, files, fallbackImages = []) {
-  // URLs typed by admin (paste-from-clipboard)
+  // Typed/pasted URLs from admin
   let imageUrls = [];
   if (body.imageUrls) {
     const raw = Array.isArray(body.imageUrls) ? body.imageUrls : [body.imageUrls];
     imageUrls = raw.filter((u) => u && u.trim() !== '');
   }
 
-  // Files uploaded via Cloudinary — each file has a .path property = secure_url
-  const uploadedUrls = (files || []).map((f) => {
-    console.log('[Cloudinary] uploaded:', f.path);
-    return f.path;
+  // Uploaded files stored in GridFS — each file carries { filename, id, ... }
+  const uploadedPaths = (files || []).map((f) => {
+    const p = `/api/uploads/${f.filename}`;
+    console.log('[GridFS] saved:', p, '| id:', f.id);
+    return p;
   });
 
-  const combined = [...imageUrls, ...uploadedUrls];
-  console.log('[Products] final image list:', combined);
+  const combined = [...imageUrls, ...uploadedPaths];
+  console.log('[Products] final images:', combined);
 
   let sizes = [];
-  if (body.sizes) {
-    sizes = Array.isArray(body.sizes) ? body.sizes : [body.sizes];
-  }
+  if (body.sizes) sizes = Array.isArray(body.sizes) ? body.sizes : [body.sizes];
 
   return {
     name: body.name,
@@ -119,12 +159,13 @@ router.get('/:id', async (req, res) => {
 
 // ─── POST /api/products — create (admin) ──────────────────────────────────────
 
-router.post('/', adminAuth, upload.array('imageFiles', 10), async (req, res) => {
+router.post('/', adminAuth, runUpload, async (req, res) => {
   try {
-    console.log('[Products] POST — files received:', req.files?.length || 0);
+    console.log('[Products] POST — body keys:', Object.keys(req.body));
+    console.log('[Products] POST — files:', req.files?.length || 0);
     const data = parseProductBody(req.body, req.files);
     const product = await Product.create(data);
-    console.log('[Products] saved images:', product.images);
+    console.log('[Products] created:', product._id, '| images:', product.images);
     res.status(201).json(product);
   } catch (error) {
     console.error('[Products] POST error:', error.message);
@@ -134,19 +175,28 @@ router.post('/', adminAuth, upload.array('imageFiles', 10), async (req, res) => 
 
 // ─── PUT /api/products/:id — update (admin) ───────────────────────────────────
 
-router.put('/:id', adminAuth, upload.array('imageFiles', 10), async (req, res) => {
+router.put('/:id', adminAuth, runUpload, async (req, res) => {
   try {
-    console.log('[Products] PUT — files received:', req.files?.length || 0);
+    console.log('[Products] PUT — files:', req.files?.length || 0);
     const existing = await Product.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: 'Product not found' });
 
     const data = parseProductBody(req.body, req.files, existing.images);
 
+    // Delete any GridFS images that were in the old product but are no longer in the new list
+    const removedImages = (existing.images || []).filter(
+      (img) => !data.images.includes(img)
+    );
+    if (removedImages.length) {
+      console.log('[Products] removing images:', removedImages);
+      deleteGridFSImages(removedImages); // fire-and-forget, don't block response
+    }
+
     const product = await Product.findByIdAndUpdate(req.params.id, data, {
       new: true,
       runValidators: true,
     });
-    console.log('[Products] updated images:', product.images);
+    console.log('[Products] updated:', product._id, '| images:', product.images);
     res.json(product);
   } catch (error) {
     console.error('[Products] PUT error:', error.message);
@@ -160,6 +210,10 @@ router.delete('/:id', adminAuth, async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
+
+    // Clean up GridFS images for this product
+    deleteGridFSImages(product.images); // fire-and-forget
+
     res.json({ message: 'Product deleted successfully' });
   } catch {
     res.status(500).json({ message: 'Server error' });
