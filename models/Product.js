@@ -10,7 +10,8 @@ const productSchema = new mongoose.Schema(
     colors: [{ type: String }],
     sizes: [{ type: String }],
     stock: { type: Number, default: 0, min: 0 },
-    images: [{ type: String }],
+    // Each element is either a legacy URL string OR { fileId, filename, contentType }
+    images: [{ type: mongoose.Schema.Types.Mixed }],
     featured: { type: Boolean, default: false },
     newArrival: { type: Boolean, default: false },
     koreanStyle: { type: Boolean, default: false },
