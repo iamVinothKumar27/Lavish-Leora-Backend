@@ -8,7 +8,10 @@ const connectDB = require('./config/db');
 dotenv.config();
 
 // Warn about missing required env vars at startup
-const REQUIRED_ENV = ['MONGO_URI', 'GOOGLE_CLIENT_ID', 'JWT_SECRET'];
+const REQUIRED_ENV = [
+  'MONGO_URI', 'GOOGLE_CLIENT_ID', 'JWT_SECRET',
+  'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET',
+];
 REQUIRED_ENV.forEach((key) => {
   if (!process.env[key]) {
     console.warn(`⚠️  WARNING: ${key} is not set in backend .env — some features will fail`);
@@ -21,6 +24,7 @@ const app = express();
 
 const allowedOrigins = [
   'http://localhost:5173',
+  'http://localhost:5174',
   process.env.CLIENT_URL,
 ].filter(Boolean);
 
@@ -41,6 +45,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/products', require('./routes/products'));
+app.use('/api/categories', require('./routes/categories'));
 app.use('/api/contacts', require('./routes/contacts'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/users', require('./routes/users'));
@@ -63,9 +68,12 @@ app.get('/api/health', (req, res) => {
       MONGO_URI:        process.env.MONGO_URI        ? '✅ set' : '❌ missing',
       GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? '✅ set' : '❌ missing',
       JWT_SECRET:       process.env.JWT_SECRET       ? '✅ set' : '❌ missing',
-      ADMIN_EMAIL:      process.env.ADMIN_EMAIL      || '❌ missing',
-      CLIENT_URL:       process.env.CLIENT_URL       || 'http://localhost:5173 (default)',
-      BACKEND_URL:      process.env.BACKEND_URL      || 'http://localhost:5000 (default)',
+      ADMIN_EMAIL:            process.env.ADMIN_EMAIL            || '❌ missing',
+      CLIENT_URL:             process.env.CLIENT_URL             || 'http://localhost:5173 (default)',
+      BACKEND_URL:            process.env.BACKEND_URL            || 'http://localhost:5000 (default)',
+      CLOUDINARY_CLOUD_NAME:  process.env.CLOUDINARY_CLOUD_NAME  ? '✅ set' : '❌ missing',
+      CLOUDINARY_API_KEY:     process.env.CLOUDINARY_API_KEY     ? '✅ set' : '❌ missing',
+      CLOUDINARY_API_SECRET:  process.env.CLOUDINARY_API_SECRET  ? '✅ set' : '❌ missing',
     },
   });
 });

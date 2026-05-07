@@ -1,73 +1,53 @@
 const express = require('express');
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('../config/cloudinary');
 const Product = require('../models/Product');
 const adminAuth = require('../middleware/adminAuth');
 
-// ─── Multer setup ─────────────────────────────────────────────────────────────
-// Vercel serverless has a read-only filesystem — disk storage crashes at startup.
-// On Vercel, use memoryStorage (files are received but not persisted to disk).
-// On Vercel, only image URLs typed by the admin are saved; uploaded files are ignored.
-// Locally, disk storage works as before.
+// ─── Cloudinary storage for product images ────────────────────────────────────
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'lavish-leora/products',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    transformation: [{ quality: 'auto', fetch_format: 'auto' }],
+  },
+});
 
-const IS_VERCEL = !!process.env.VERCEL;
-
-let upload;
-if (IS_VERCEL) {
-  upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 },
-  });
-} else {
-  const uploadDir = path.join(__dirname, '../uploads/products');
-  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-  const diskStorage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir),
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase();
-      cb(null, `product-${Date.now()}-${Math.round(Math.random() * 9999)}${ext}`);
-    },
-  });
-
-  upload = multer({
-    storage: diskStorage,
-    fileFilter: (req, file, cb) => {
-      const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
-      if (allowed.includes(path.extname(file.originalname).toLowerCase())) {
-        cb(null, true);
-      } else {
-        cb(new Error('Only image files (jpg, jpeg, png, webp, gif) are allowed.'));
-      }
-    },
-    limits: { fileSize: 5 * 1024 * 1024 },
-  });
-}
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only jpg, jpeg, png, webp images are allowed.'));
+    }
+  },
+});
 
 // ─── Parse product body from multipart/form-data ─────────────────────────────
 
 function parseProductBody(body, files, fallbackImages = []) {
-  // Collect URL strings typed by admin
+  // URLs typed by admin (paste-from-clipboard)
   let imageUrls = [];
   if (body.imageUrls) {
     const raw = Array.isArray(body.imageUrls) ? body.imageUrls : [body.imageUrls];
     imageUrls = raw.filter((u) => u && u.trim() !== '');
   }
 
-  // File uploads are not supported on Vercel (no persistent disk storage).
-  // On Vercel, admins must use image URL inputs instead of file uploads.
-  const uploadedUrls = IS_VERCEL
-    ? []
-    : (files || []).map((f) => {
-        const BASE = process.env.BACKEND_URL || 'http://localhost:5000';
-        return `${BASE}/uploads/products/${f.filename}`;
-      });
+  // Files uploaded via Cloudinary — each file has a .path property = secure_url
+  const uploadedUrls = (files || []).map((f) => {
+    console.log('[Cloudinary] uploaded:', f.path);
+    return f.path;
+  });
 
   const combined = [...imageUrls, ...uploadedUrls];
+  console.log('[Products] final image list:', combined);
 
-  // Sizes: may come as array (multiple values) or string (one value)
   let sizes = [];
   if (body.sizes) {
     sizes = Array.isArray(body.sizes) ? body.sizes : [body.sizes];
@@ -79,6 +59,9 @@ function parseProductBody(body, files, fallbackImages = []) {
     price: Number(body.price) || 0,
     category: body.category,
     subcategory: body.subcategory || '',
+    colors: body.colors
+      ? (Array.isArray(body.colors) ? body.colors : [body.colors]).filter(Boolean)
+      : [],
     sizes,
     stock: Number(body.stock) || 0,
     images: combined.length > 0 ? combined : fallbackImages,
@@ -134,15 +117,17 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// ─── POST /api/products — create (admin) ─────────────────────────────────────
-// Accepts multipart/form-data (supports file upload + URL input together)
+// ─── POST /api/products — create (admin) ──────────────────────────────────────
 
 router.post('/', adminAuth, upload.array('imageFiles', 10), async (req, res) => {
   try {
+    console.log('[Products] POST — files received:', req.files?.length || 0);
     const data = parseProductBody(req.body, req.files);
     const product = await Product.create(data);
+    console.log('[Products] saved images:', product.images);
     res.status(201).json(product);
   } catch (error) {
+    console.error('[Products] POST error:', error.message);
     res.status(400).json({ message: error.message });
   }
 });
@@ -151,18 +136,20 @@ router.post('/', adminAuth, upload.array('imageFiles', 10), async (req, res) => 
 
 router.put('/:id', adminAuth, upload.array('imageFiles', 10), async (req, res) => {
   try {
+    console.log('[Products] PUT — files received:', req.files?.length || 0);
     const existing = await Product.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: 'Product not found' });
 
-    // Keep existing images as fallback if admin sends no new images
     const data = parseProductBody(req.body, req.files, existing.images);
 
     const product = await Product.findByIdAndUpdate(req.params.id, data, {
       new: true,
       runValidators: true,
     });
+    console.log('[Products] updated images:', product.images);
     res.json(product);
   } catch (error) {
+    console.error('[Products] PUT error:', error.message);
     res.status(400).json({ message: error.message });
   }
 });
