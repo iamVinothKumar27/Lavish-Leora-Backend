@@ -125,7 +125,7 @@ function parseProductBody(body, uploadedImages, fallbackImages = []) {
 
 router.get('/', async (req, res) => {
   try {
-    const { category, subcategory, featured, newArrival, koreanStyle, search, limit, page } = req.query;
+    const { category, subcategory, featured, newArrival, koreanStyle, search, limit, page, sort } = req.query;
     const filter = {};
     if (category) filter.category = category;
     if (subcategory) filter.subcategory = subcategory;
@@ -143,11 +143,25 @@ router.get('/', async (req, res) => {
     const limitNum = parseInt(limit) || 20;
     const skip = (pageNum - 1) * limitNum;
 
+    let sortObj = { createdAt: -1 };
+    if (sort === 'price-asc') sortObj = { price: 1 };
+    else if (sort === 'price-desc') sortObj = { price: -1 };
+
     const [products, total] = await Promise.all([
-      Product.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
+      Product.find(filter).sort(sortObj).skip(skip).limit(limitNum),
       Product.countDocuments(filter),
     ]);
-    res.json({ products, total, page: pageNum, pages: Math.ceil(total / limitNum) });
+
+    const totalPages = Math.ceil(total / limitNum);
+    res.json({
+      products,
+      total,
+      totalProducts: total,
+      page: pageNum,
+      currentPage: pageNum,
+      pages: totalPages,
+      totalPages,
+    });
   } catch {
     res.status(500).json({ message: 'Server error' });
   }
