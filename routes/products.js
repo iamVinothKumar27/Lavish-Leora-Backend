@@ -109,6 +109,27 @@ function parseProductBody(body, uploadedImages, fallbackImages = []) {
     price: Number(body.price) || 0,
     category: body.category,
     subcategory: body.subcategory || '',
+    subCategory: (() => {
+      if (!body.subCategory) return [];
+      const arr = Array.isArray(body.subCategory) ? body.subCategory : [body.subCategory];
+      return arr.filter(Boolean);
+    })(),
+    childCategory: (() => {
+      if (!body.childCategory) return [];
+      const arr = Array.isArray(body.childCategory) ? body.childCategory : [body.childCategory];
+      return arr.filter(Boolean);
+    })(),
+    categoryPath: (() => {
+      const subArr = body.subCategory
+        ? (Array.isArray(body.subCategory) ? body.subCategory : [body.subCategory]).filter(Boolean)
+        : [];
+      const childArr = body.childCategory
+        ? (Array.isArray(body.childCategory) ? body.childCategory : [body.childCategory]).filter(Boolean)
+        : [];
+      return [body.category, body.subcategory, subArr.join(' / '), childArr.join(' / ')]
+        .filter(Boolean)
+        .join(' > ');
+    })(),
     colors: body.colors
       ? (Array.isArray(body.colors) ? body.colors : [body.colors]).filter(Boolean)
       : [],
@@ -129,6 +150,8 @@ router.get('/', async (req, res) => {
     const filter = {};
     if (category) filter.category = category;
     if (subcategory) filter.subcategory = subcategory;
+    if (req.query.subCategory) filter.subCategory = req.query.subCategory;
+    if (req.query.childCategory) filter.childCategory = req.query.childCategory;
     if (featured === 'true') filter.featured = true;
     if (newArrival === 'true') filter.newArrival = true;
     if (koreanStyle === 'true') filter.koreanStyle = true;
@@ -162,6 +185,16 @@ router.get('/', async (req, res) => {
       pages: totalPages,
       totalPages,
     });
+  } catch {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ─── GET /api/products/categories — distinct category names with products ─────
+router.get('/categories', async (req, res) => {
+  try {
+    const categories = await Product.distinct('category');
+    res.json(categories.filter(Boolean).sort());
   } catch {
     res.status(500).json({ message: 'Server error' });
   }

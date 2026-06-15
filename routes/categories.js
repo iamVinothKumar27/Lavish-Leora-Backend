@@ -5,21 +5,44 @@ const adminAuth = require('../middleware/adminAuth');
 
 const DEFAULT_CATEGORIES = [
   {
-    name: 'Women',
-    subcategories: ['Kurtis', 'Co-ords', 'Korean Dresses', 'Tops', 'Western Dresses', 'Sarees', 'Gowns', 'Lehengas', 'Skirts'],
+    gender: 'Women',
+    name: 'Korean',
+    children: [
+      { name: 'Coords', children: [] },
+      { name: 'Pants', children: [] },
+      { name: 'Bamboo', children: [] },
+    ],
   },
   {
-    name: 'Men',
-    subcategories: ['Shirts', 'T-Shirts', 'Jeans', 'Pants', 'Ethnic Wear', 'Co-ords'],
+    gender: 'Women',
+    name: 'Ethnic',
+    children: [
+      {
+        name: 'Kurti',
+        children: [
+          { name: 'Single Piece Kurti' },
+          { name: '2 PC Kurti' },
+          { name: '3 PC Kurti' },
+        ],
+      },
+    ],
+  },
+  {
+    gender: 'Men',
+    name: 'Inner Wears',
+    children: [],
   },
 ];
 
-// GET all categories — auto-seeds defaults if collection is empty
+// GET all categories — auto-seeds defaults if empty or if old flat schema detected
 router.get('/', async (req, res) => {
   try {
-    let categories = await Category.find().sort({ name: 1 });
+    let categories = await Category.find().sort({ gender: 1, name: 1 });
 
-    if (categories.length === 0) {
+    // Migrate: old schema had `subcategories` (no `gender` field) → drop and re-seed
+    const needsMigration = categories.length > 0 && !categories[0].gender;
+    if (categories.length === 0 || needsMigration) {
+      await Category.deleteMany({});
       categories = await Category.insertMany(DEFAULT_CATEGORIES);
     }
 
@@ -32,40 +55,34 @@ router.get('/', async (req, res) => {
 // POST create category (admin only)
 router.post('/', adminAuth, async (req, res) => {
   try {
-    const { name, subcategories = [] } = req.body;
-
-    if (!name?.trim()) {
-      return res.status(400).json({ message: 'Category name is required' });
+    const { gender, name, children = [] } = req.body;
+    if (!gender?.trim() || !name?.trim()) {
+      return res.status(400).json({ message: 'Gender and name are required' });
     }
-
-    const existing = await Category.findOne({ name: name.trim() });
+    const existing = await Category.findOne({ gender: gender.trim(), name: name.trim() });
     if (existing) {
-      return res.status(400).json({ message: `Category "${name.trim()}" already exists` });
+      return res.status(400).json({ message: `Category "${gender}/${name}" already exists` });
     }
-
-    const category = await Category.create({ name: name.trim(), subcategories });
+    const category = await Category.create({ gender: gender.trim(), name: name.trim(), children });
     res.status(201).json(category);
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
 });
 
-// PUT update category name and/or subcategories (admin only)
+// PUT update category (admin only)
 router.put('/:id', adminAuth, async (req, res) => {
   try {
-    const { name, subcategories } = req.body;
-
+    const { gender, name, children } = req.body;
     const update = {};
+    if (gender !== undefined) update.gender = gender.trim();
     if (name !== undefined) update.name = name.trim();
-    if (subcategories !== undefined) {
-      update.subcategories = subcategories.filter((s) => s && s.trim() !== '');
-    }
+    if (children !== undefined) update.children = children;
 
     const category = await Category.findByIdAndUpdate(req.params.id, update, {
       new: true,
       runValidators: true,
     });
-
     if (!category) return res.status(404).json({ message: 'Category not found' });
     res.json(category);
   } catch (err) {

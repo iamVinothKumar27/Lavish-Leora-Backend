@@ -13,14 +13,27 @@ router.post('/', async (req, res) => {
 
     const contact = await Contact.create({ name, email, phone, message });
 
-    // --- Nodemailer integration (configure when SMTP is ready) ---
-    // const nodemailer = require('nodemailer');
-    // const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } });
-    // await transporter.sendMail({
-    //   from: email, to: process.env.CONTACT_DESTINATION_EMAIL,
-    //   subject: `New message from ${name} - Lavish Leora`,
-    //   text: message,
-    // });
+    // Send email if SMTP credentials are configured
+    if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+      try {
+        const nodemailer = require('nodemailer');
+        const transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+        });
+        await transporter.sendMail({
+          from: `"Lavish Leora Contact" <${process.env.SMTP_USER}>`,
+          to: process.env.CONTACT_DESTINATION_EMAIL || 'lavishleora@gmail.com',
+          replyTo: email,
+          subject: `New message from ${name} — Lavish Leora`,
+          text: `Name: ${name}\nEmail: ${email}\nPhone: ${phone || 'N/A'}\n\nMessage:\n${message}`,
+          html: `<h2>New Contact Message — Lavish Leora</h2><p><strong>Name:</strong> ${name}</p><p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p><p><strong>Phone:</strong> ${phone || 'N/A'}</p><hr><p><strong>Message:</strong></p><p>${message.replace(/\n/g, '<br>')}</p>`,
+        });
+        console.log(`[Contact] Email sent to ${process.env.CONTACT_DESTINATION_EMAIL || 'lavishleora@gmail.com'}`);
+      } catch (emailErr) {
+        console.error('[Contact] Email send failed (message still saved):', emailErr.message);
+      }
+    }
 
     res.status(201).json({ message: 'Your message has been received. We will contact you soon!', id: contact._id });
   } catch (error) {

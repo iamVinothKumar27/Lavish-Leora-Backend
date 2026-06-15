@@ -10,6 +10,14 @@ async function getOrCreateCart(userId) {
   return cart;
 }
 
+// Convert a product image (string URL or GridFS object) to a URL string for cart storage
+function imageToString(img) {
+  if (!img) return '';
+  if (typeof img === 'string') return img;
+  if (img && img.fileId) return `/api/images/${img.fileId}`;
+  return '';
+}
+
 // GET /api/cart
 router.get('/', auth, async (req, res) => {
   try {
@@ -41,7 +49,7 @@ router.post('/add', auth, async (req, res) => {
         product: productId,
         name: product.name,
         price: product.price,
-        image: product.images?.[0] || '',
+        image: imageToString(product.images?.[0]),
         category: product.category,
         subcategory: product.subcategory || '',
         size,
