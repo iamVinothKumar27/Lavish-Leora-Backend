@@ -20,20 +20,22 @@ connectDB();
 const app = express();
 
 const allowedOrigins = [
+  'https://www.lavishleora.shop',
+  'https://lavishleora.shop',
   'http://localhost:5173',
-  'http://localhost:5174',
+  'http://localhost:3000',
   process.env.CLIENT_URL,
 ].filter(Boolean);
 
 const corsOptions = {
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS blocked: ${origin}`));
+    console.error('[CORS] Blocked origin:', origin);
+    callback(new Error(`Not allowed by CORS`));
   },
   credentials: true,
-  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
