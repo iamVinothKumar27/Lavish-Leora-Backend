@@ -34,6 +34,41 @@ const DEFAULT_CATEGORIES = [
   },
 ];
 
+// GET /api/categories/available — filter options derived from actual products
+router.get('/available', async (req, res) => {
+  try {
+    const Product = require('../models/Product');
+    const { gender, subcategory } = req.query;
+    const match = {};
+    if (gender) match.category = gender;
+    if (subcategory) match.subcategory = subcategory;
+
+    const products = await Product.find(match)
+      .select('subcategory subCategory childCategory sizes colors')
+      .lean();
+
+    const collect = (field, isArray) => {
+      const set = new Set();
+      products.forEach((p) => {
+        const v = p[field];
+        if (isArray && Array.isArray(v)) v.forEach((x) => x && set.add(x));
+        else if (!isArray && v) set.add(v);
+      });
+      return [...set].sort();
+    };
+
+    res.json({
+      mainCats:  collect('subcategory',    false),
+      subCats:   collect('subCategory',    true),
+      childCats: collect('childCategory',  true),
+      sizes:     collect('sizes',          true),
+      colors:    collect('colors',         true),
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // GET all categories — auto-seeds defaults if empty or if old flat schema detected
 router.get('/', async (req, res) => {
   try {

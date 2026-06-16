@@ -150,11 +150,30 @@ router.get('/', async (req, res) => {
     const filter = {};
     if (category) filter.category = category;
     if (subcategory) filter.subcategory = subcategory;
-    if (req.query.subCategory) filter.subCategory = req.query.subCategory;
-    if (req.query.childCategory) filter.childCategory = req.query.childCategory;
+    if (req.query.subCategory) {
+      const vals = Array.isArray(req.query.subCategory) ? req.query.subCategory : [req.query.subCategory];
+      filter.subCategory = { $in: vals };
+    }
+    if (req.query.childCategory) {
+      const vals = Array.isArray(req.query.childCategory) ? req.query.childCategory : [req.query.childCategory];
+      filter.childCategory = { $in: vals };
+    }
     if (featured === 'true') filter.featured = true;
     if (newArrival === 'true') filter.newArrival = true;
     if (koreanStyle === 'true') filter.koreanStyle = true;
+    if (req.query.minPrice || req.query.maxPrice) {
+      filter.price = {};
+      if (req.query.minPrice) filter.price.$gte = Number(req.query.minPrice);
+      if (req.query.maxPrice) filter.price.$lte = Number(req.query.maxPrice);
+    }
+    if (req.query.size) {
+      const vals = Array.isArray(req.query.size) ? req.query.size : [req.query.size];
+      filter.sizes = { $in: vals };
+    }
+    if (req.query.color) {
+      const vals = Array.isArray(req.query.color) ? req.query.color : [req.query.color];
+      filter.colors = { $in: vals.map((c) => new RegExp(`^${c}$`, 'i')) };
+    }
     if (search) {
       filter.$or = [
         { name: { $regex: search, $options: 'i' } },

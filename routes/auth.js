@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
@@ -10,16 +11,27 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'lavishleora@gmail.com').toLower
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
+function gravatarUrl(email) {
+  const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
+  return `https://www.gravatar.com/avatar/${hash}?d=mp&s=200`;
+}
+
 function makeToken(user) {
   return jwt.sign(
-    { id: user._id, email: user.email, role: user.role, name: user.name, picture: user.picture || '' },
+    { id: user._id, email: user.email, role: user.role, name: user.name, picture: user.picture || gravatarUrl(user.email) },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
 }
 
 function safeUser(user) {
-  return { id: user._id, name: user.name, email: user.email, role: user.role, picture: user.picture || '' };
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    picture: user.picture || gravatarUrl(user.email),
+  };
 }
 
 // ─── POST /api/auth/register ─────────────────────────────────────────────────
