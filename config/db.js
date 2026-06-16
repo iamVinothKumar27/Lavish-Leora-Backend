@@ -1,61 +1,42 @@
 const mongoose = require('mongoose');
 
-// ─── URI helpers ───────────────────────────────────────────────────────────────
+// ─── Serverless connection cache ──────────────────────────────────────────────
+// Reuse the connection across invocations within the same Lambda/function instance.
+// Without this, every cold-start would open a new connection and exhaust the pool.
+let cached = global._mongooseCache;
+if (!cached) {
+  cached = global._mongooseCache = { conn: null, promise: null };
+}
 
-/** Mask password so the URI is safe to print in logs */
+// ─── URI helpers ──────────────────────────────────────────────────────────────
+
 function maskUri(uri) {
   return uri.replace(/:([^:@]+)@/, ':****@');
 }
 
-/**
- * Validate and sanitise the raw MONGO_URI value.
- * Returns the clean URI string, or throws with a human-readable message.
- *
- * Common mistakes this catches:
- *   - MONGO_URI=MONGO_URI=mongodb+srv://...  (key duplicated in value)
- *   - Leading/trailing whitespace
- *   - Missing database name
- */
 function sanitiseUri(raw) {
   if (!raw) {
     throw new Error(
-      'MONGO_URI is not set in backend/.env\n' +
-      '  Add this line to backend/.env:\n' +
-      '  MONGO_URI=mongodb+srv://USER:PASS@cluster.mongodb.net/lavishleora?retryWrites=true&w=majority'
+      'MONGO_URI is not set in environment variables.\n' +
+      '  Add MONGO_URI=mongodb+srv://USER:PASS@cluster.mongodb.net/lavishleora?retryWrites=true&w=majority'
     );
   }
 
-  // Strip any surrounding whitespace or quotes
   let uri = raw.trim().replace(/^["']|["']$/g, '');
 
-  // ── Detect the "MONGO_URI=MONGO_URI=..." double-prefix bug ──────────────
-  // When someone pastes the full KEY=VALUE line as the value, dotenv stores
-  // the raw string including the key name, e.g.:
-  //   process.env.MONGO_URI === "MONGO_URI=mongodb+srv://..."
-  // We strip any leading "ANYWORD=" prefix until we reach a valid scheme.
+  // Strip accidental "MONGO_URI=..." prefix in value
   const schemePattern = /^[A-Z_]+=(.+)$/;
   let iterations = 0;
-  while (schemePattern.test(uri) && iterations < 5) {
+  while (schemePattern.test(uri) && iterations++ < 5) {
     const stripped = uri.match(schemePattern)[1].trim();
-    // Only strip if the result looks more like a URI
-    if (stripped.startsWith('mongodb')) {
-      uri = stripped;
-    } else {
-      break;
-    }
-    iterations++;
+    if (stripped.startsWith('mongodb')) uri = stripped;
+    else break;
   }
 
-  // ── Final scheme check ───────────────────────────────────────────────────
   if (!uri.startsWith('mongodb://') && !uri.startsWith('mongodb+srv://')) {
     throw new Error(
-      `Invalid MONGO_URI value in backend/.env\n` +
-      `  Received: "${uri.slice(0, 60)}${uri.length > 60 ? '…' : ''}"\n\n` +
-      `  The value must start with mongodb:// or mongodb+srv://\n` +
-      `  Make sure your .env line looks like:\n` +
-      `  MONGO_URI=mongodb+srv://USER:PASS@cluster.mongodb.net/lavishleora?retryWrites=true&w=majority\n\n` +
-      `  Common mistake — do NOT write:\n` +
-      `  MONGO_URI=MONGO_URI=mongodb+srv://...   ← duplicate key in value`
+      `Invalid MONGO_URI — must start with mongodb:// or mongodb+srv://\n` +
+      `  Received: "${uri.slice(0, 60)}${uri.length > 60 ? '…' : ''}"`
     );
   }
 
@@ -64,83 +45,46 @@ function sanitiseUri(raw) {
 
 // ─── connectDB ────────────────────────────────────────────────────────────────
 
-/**
- * Connect to MongoDB Atlas.
- *
- * Atlas checklist (run through this if connection fails):
- *  1. Cluster is ACTIVE (not paused) — cloud.mongodb.com → your cluster → Resume
- *  2. Network Access → Add IP → 0.0.0.0/0 (Allow from anywhere)
- *  3. Database Access → your user exists with "readWriteAnyDatabase" role
- *  4. Password is correct and special chars are URL-encoded (@ → %40, # → %23 …)
- *  5. Database name "lavishleora" is included in the URI before the "?"
- */
 const connectDB = async () => {
-  let uri;
+  // Return cached connection immediately (typical for warm serverless invocations)
+  if (cached.conn) return cached.conn;
 
-  try {
-    uri = sanitiseUri(process.env.MONGO_URI);
-  } catch (validationErr) {
-    console.error(`\n❌ ${validationErr.message}\n`);
-    process.exit(1);
+  const uri = sanitiseUri(process.env.MONGO_URI);
+
+  if (!cached.promise) {
+    console.log('\n🔌 Connecting to MongoDB Atlas…');
+    console.log(`   URI : ${maskUri(uri)}`);
+
+    cached.promise = mongoose
+      .connect(uri, {
+        bufferCommands: false,  // fail fast instead of buffering when disconnected
+      })
+      .then((m) => {
+        console.log(`✅ MongoDB connected — ${m.connection.host} / ${m.connection.name}`);
+        return m;
+      });
   }
 
-  console.log('\n🔌 Connecting to MongoDB Atlas…');
-  console.log(`   URI : ${maskUri(uri)}`);
-
   try {
-    const conn = await mongoose.connect(uri);
-
-    console.log(`✅ MongoDB connected`);
-    console.log(`   Host : ${conn.connection.host}`);
-    console.log(`   DB   : ${conn.connection.name}\n`);
+    cached.conn = await cached.promise;
   } catch (err) {
-    console.error(`\n❌ MongoDB connection FAILED`);
-    console.error(`   ${err.message}\n`);
+    // Clear the promise so the next request can retry
+    cached.promise = null;
 
-    // ── DNS / network ────────────────────────────────────────────────────
+    console.error(`\n❌ MongoDB connection FAILED: ${err.message}\n`);
+
     if (/querySrv|ECONNREFUSED|ENOTFOUND|getaddrinfo|EAI_AGAIN/.test(err.message)) {
-      console.error(
-        '   DIAGNOSIS: DNS or network error\n' +
-        '   → Atlas cluster is PAUSED?  Resume it at cloud.mongodb.com\n' +
-        '   → IP not whitelisted?       Atlas → Network Access → Add 0.0.0.0/0\n' +
-        '   → No internet?              Check your network connection\n' +
-        '   → Wrong cluster URL?        Re-copy the SRV string from Atlas → Connect\n'
-      );
+      console.error('   → Cluster paused? Resume at cloud.mongodb.com');
+      console.error('   → IP not whitelisted? Atlas → Network Access → Add 0.0.0.0/0\n');
+    }
+    if (/Authentication failed|bad auth|SCRAM/.test(err.message)) {
+      console.error('   → Wrong username or password in MONGO_URI\n');
     }
 
-    // ── Authentication ────────────────────────────────────────────────────
-    if (/Authentication failed|bad auth|SCRAM|Unauthorized/.test(err.message)) {
-      console.error(
-        '   DIAGNOSIS: Authentication error\n' +
-        '   → Wrong username or password in MONGO_URI\n' +
-        '   → User missing?  Atlas → Database Access → Add new user\n' +
-        '   → Password has special chars?  URL-encode them (@ → %40, # → %23)\n'
-      );
-    }
-
-    // ── Bad connection string ─────────────────────────────────────────────
-    if (/Invalid scheme|Invalid connection string|URI/.test(err.message)) {
-      console.error(
-        '   DIAGNOSIS: Malformed connection string\n' +
-        '   Correct format:\n' +
-        '   mongodb+srv://USERNAME:PASSWORD@CLUSTER.mongodb.net/lavishleora?retryWrites=true&w=majority\n'
-      );
-    }
-
-    process.exit(1);
+    throw err; // Let the request handler return a 503
   }
+
+  return cached.conn;
 };
-
-// ─── Connection lifecycle ──────────────────────────────────────────────────────
-
-mongoose.connection.on('disconnected', () =>
-  console.warn('⚠️  MongoDB disconnected — will retry automatically')
-);
-mongoose.connection.on('reconnected', () =>
-  console.log('✅ MongoDB reconnected')
-);
-mongoose.connection.on('error', (err) =>
-  console.error(`⚠️  MongoDB runtime error: ${err.message}`)
-);
 
 module.exports = connectDB;
